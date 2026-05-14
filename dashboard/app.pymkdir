@@ -1,0 +1,177 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import joblib
+import shap
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).parents[1]))
+from data_exploration.umap_embedding import setup_preprocessing_pipeline
+
+# ── 頁面設定 ───────────────────────────────────────────────
+st.set_page_config(
+    page_title="Head & Neck Cancer Recurrence Risk",
+    page_icon="🏥",
+    layout="wide"
+)
+
+# ── 載入模型 ───────────────────────────────────────────────
+@st.cache_resource
+def load_models():
+    model_dir = Path(__file__).parent / "models"
+    model        = joblib.load(model_dir / "model.pkl")
+    preprocessor = joblib.load(model_dir / "preprocessor.pkl")
+    selector     = joblib.load(model_dir / "selector.pkl")
+    feature_names= joblib.load(model_dir / "feature_names.pkl")
+    clip_bounds  = joblib.load(model_dir / "clip_bounds.pkl")
+    return model, preprocessor, selector, feature_names, clip_bounds
+
+model, preprocessor, selector, feature_names, clip_bounds = load_models()
+
+
+# ── 計算發炎指標 ───────────────────────────────────────────
+def calculate_biomarkers(neutrophils, lymphocytes, platelets, monocytes):
+    """自動從原始血液數值計算 NLR、PLR、LMR、SII"""
+    nlr = neutrophils / lymphocytes if lymphocytes > 0 else 0
+    plr = platelets / lymphocytes   if lymphocytes > 0 else 0
+    lmr = lymphocytes / monocytes   if monocytes > 0   else 0
+    sii = (platelets * neutrophils) / lymphocytes if lymphocytes > 0 else 0
+    return nlr, plr, lmr, sii
+
+
+def add_interaction_features(df):
+    """加入交互特徵"""
+    df = df.copy()
+    cols = list(df.columns)
+
+    def find_col(keywords):
+        for kw in keywords:
+            matches = [c for c in cols if kw.lower() in str(c).lower()]
+            if matches:
+                return matches[0]
+        return None
+
+    nlr_col = find_col(["NLR"])
+    plr_col = find_col(["PLR"])
+    lmr_col = find_col(["LMR"])
+    pn_col  = find_col(["pN_stage"])
+    lym_col = find_col(["positive_lymph"])
+    pni_col = find_col(["perineural"])
+
+    if nlr_col and pn_col:
+        df["interact_NLR_x_pNstage"] = df[nlr_col] * df[pn_col].fillna(0)
+    if plr_col and lym_col:
+        df["interact_PLR_x_lymph"]   = df[plr_col] * df[lym_col].fillna(0)
+    if lmr_col and pni_col:
+        df["interact_LMR_x_PNI"]     = df[lmr_col] * df[pni_col].fillna(0)
+    if nlr_col and plr_col:
+        df["interact_NLR_div_PLR"]   = df[nlr_col] / (df[plr_col].replace(0, np.nan)).fillna(df[plr_col].median())
+    if nlr_col and lmr_col:
+        df["interact_NLR_x_LMR"]     = df[nlr_col] * df[lmr_col]
+    return df
+
+
+def predict_risk(input_data):
+    """預測復發風險"""
+    df = pd.DataFrame([input_data])
+
+    # Clip biomarkers
+    for col, (q_low, q_high) in clip_bounds.items():
+        if col in df.columns:
+            df[col] = df[col].clip(lower=q_low, upper=q_high)
+
+    # Interaction features
+    df = add_interaction_features(df)
+
+    # Preprocessor
+    X_processed = preprocessor.transform(df)
+
+    # Feature selection
+    X_selected = selector.transform(X_processed)
+
+    # Predict
+    proba = model.predict_proba(X_selected)[0][1]
+    return proba, X_selected
+
+
+def get_shap_values(X_selected):
+    """計算 SHAP 值"""
+    rf_model  = model.estimators_[0]
+    explainer = shap.TreeExplainer(rf_model)
+    shap_vals = explainer.shap_values(X_selected)
+    if isinstance(shap_vals, list):
+        return shap_vals[1][0], explainer.expected_value[1]
+    if len(np.array(shap_vals).shape) == 3:
+        return shap_vals[0, :, 1], explainer.expected_value[1]
+    return shap_vals[0], explainer.expected_value
+
+
+def risk_level(proba):
+    """判斷風險等級"""
+    if proba < 0.3:
+        return "低風險", "🟢", "green"
+    elif proba < 0.6:
+        return "中風險", "🟡", "orange"
+    else:
+        return "高風險", "🔴", "red"
+
+
+# ── 側邊欄：選擇模式 ───────────────────────────────────────
+st.sidebar.title("🏥 HANCOCK Risk System")
+st.sidebar.markdown("---")
+mode = st.sidebar.radio(
+    "選擇使用模式",
+    ["👤 病患模式", "👨‍⚕️ 醫師模式"]
+)
+st.sidebar.markdown("---")
+st.sidebar.info("此系統專為頭頸癌術後復發風險評估設計，僅供參考，不取代專業醫療診斷。")
+
+# ══════════════════════════════════════════════════════════════
+# 病患模式
+# ══════════════════════════════════════════════════════════════
+if mode == "👤 病患模式":
+    st.title("🏥 頭頸癌術後復發風險評估")
+    st.markdown("請根據您最近的血液檢查報告填入以下數值，系統將自動分析您的復發風險。")
+    st.markdown("---")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("📋 基本資料")
+        age    = st.number_input("年齡", min_value=18, max_value=100, value=60)
+        sex    = st.selectbox("性別", ["男性", "女性"])
+        smoking= st.selectbox("吸菸狀況", ["從未吸菸", "現在吸菸", "已戒菸"])
+
+    with col2:
+        st.subheader("🩸 血液檢查數值")
+        st.caption("請從健康檢查報告上找到以下數值填入")
+        neutrophils = st.number_input("嗜中性球 Neutrophils (×10³/μL)", min_value=0.0, value=4.0, step=0.1)
+        lymphocytes = st.number_input("淋巴球 Lymphocytes (×10³/μL)",   min_value=0.1, value=2.0, step=0.1)
+        platelets   = st.number_input("血小板 Platelets (×10³/μL)",     min_value=0.0, value=200.0, step=1.0)
+        monocytes   = st.number_input("單核球 Monocytes (×10³/μL)",     min_value=0.1, value=0.5, step=0.1)
+
+    # 自動計算發炎指標
+    nlr, plr, lmr, sii = calculate_biomarkers(neutrophils, lymphocytes, platelets, monocytes)
+
+    st.markdown("---")
+    st.subheader("📊 自動計算的發炎指標")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("NLR", f"{nlr:.2f}", help="嗜中性球/淋巴球比值，正常值 < 3")
+    c2.metric("PLR", f"{plr:.2f}", help="血小板/淋巴球比值，正常值 < 150")
+    c3.metric("LMR", f"{lmr:.2f}", help="淋巴球/單核球比值，正常值 > 4")
+    c4.metric("SII", f"{sii:.2f}", help="全身性免疫發炎指數，正常值 < 600")
+
+    st.markdown("---")
+
+    if st.button("🔍 開始分析", type="primary", use_container_width=True):
+        # 準備輸入資料（用預設值填入缺少的病理資料）
+        input_data = {
+            "sex"                          : 1 if sex == "男性" else 0,
+            "primarily_metastasis"         : 0,
+            "smoking_status"               : {"從未吸菸": 0, "現在吸菸": 1, "已戒菸": 2}[smoking],
+            "age_at_initial_diagnosis"     : age,
+            "perinodal_invasion"           : 0,
+            "lymphovascular_invasion_L"    : 0,
+            "vascular_invasion_V"          : 0,
+            "perineural_invasion_Pn"       : 0,

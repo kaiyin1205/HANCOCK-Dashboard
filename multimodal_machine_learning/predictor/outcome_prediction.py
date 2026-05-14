@@ -19,7 +19,7 @@ from data_exploration.umap_embedding import setup_preprocessing_pipeline, get_um
 
 
 # ── Config cho outlier clipping ───────────────────────────────────────────────
-BIOMARKER_COLS = ["NLR", "PLR", "LMR"]  
+BIOMARKER_COLS = ["NLR", "PLR", "LMR"]  # cột trong calculated_biomarkers.csv
 CLIP_LOWER_QUANTILE = 0.01              # 1st percentile
 CLIP_UPPER_QUANTILE = 0.99              # 99th percentile
 
@@ -141,7 +141,6 @@ if __name__ == "__main__":
     parser.add_argument("features_directory", type=str, help="Path to directory with extracted features")
     parser.add_argument("results_directory", type=str, help="Path to directory where results will be saved")
     parser.add_argument("target", type=str, help="Target class", choices=["recurrence", "survival_status"])
-    parser.add_argument("--biomarkers", type=str, default="calculated_biomarkers", help="Biomarkers filename (without .csv)")
     args = parser.parse_args()
 
     data_dir = Path(args.features_directory)
@@ -158,7 +157,7 @@ if __name__ == "__main__":
     # blood = pd.read_csv(data_dir/"blood.csv", dtype={"patient_id": str})
     icd = pd.read_csv(data_dir/"icd_codes.csv", dtype={"patient_id": str})
     cell_density = pd.read_csv(data_dir/"tma_cell_density.csv", dtype={"patient_id": str})
-    biomarkers = pd.read_csv(data_dir/f"{args.biomarkers}.csv", dtype={"patient_id": str})
+    biomarkers = pd.read_csv(data_dir/"calculated_biomarkers.csv", dtype={"patient_id": str})
 
     # Lưu ý: Phải xóa cột 'recurrence' trong file này trước khi gộp để tránh rò rỉ dữ liệu (data leakage)
     if "recurrence" in biomarkers.columns:
