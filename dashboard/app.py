@@ -264,8 +264,23 @@ if mode == "👤 Patient Mode":
 
         with st.spinner("Analyzing..."):
             try:
-                proba, X_selected  = predict_risk(input_data)
-                level, icon, color = risk_level(proba)
+                proba, X_selected = predict_risk(input_data)
+
+                # Override risk level based on inflammatory markers directly
+                def biomarker_risk_level(nlr, plr, lmr, sii):
+                    high_count = 0
+                    if nlr > 5:    high_count += 1
+                    if plr > 300:  high_count += 1
+                    if lmr < 1.5:  high_count += 1
+                    if sii > 1800: high_count += 1
+                    if high_count >= 3:
+                        return "High Risk",   "🔴", "red"
+                    elif high_count >= 1:
+                        return "Medium Risk", "🟡", "orange"
+                    else:
+                        return "Low Risk",    "🟢", "green"
+
+                level, icon, color = biomarker_risk_level(nlr, plr, lmr, sii)
 
                 st.markdown("---")
                 st.subheader("📈 Results")
@@ -282,23 +297,12 @@ if mode == "👤 Patient Mode":
 
                 with col_r2:
                     if level == "Low Risk":
-                        st.success("✅ You are currently at low risk. Please continue regular follow-up visits every 6 months.")
+                        st.success("You are currently at low risk. Please continue regular follow-up visits every 6 months.")
                     elif level == "Medium Risk":
-                        st.warning("⚠️ You are currently at medium risk. Follow-up visits every 3 months are recommended. Please inform your physician.")
+                        st.warning("You are currently at medium risk. Follow-up visits every 3 months are recommended. Please inform your physician.")
                     else:
-                        st.error("🚨 You are currently at high risk. Please consult your physician as soon as possible to arrange more frequent follow-up examinations.")
-
-                    st.markdown("**Markers requiring attention:**")
-                    if nlr > 3:
-                        st.markdown(f"- 🔴 NLR ({nlr:.2f}) is elevated — may indicate stronger inflammatory response")
-                    if plr > 150:
-                        st.markdown(f"- 🔴 PLR ({plr:.2f}) is elevated — may indicate weaker immune status")
-                    if lmr < 4:
-                        st.markdown(f"- 🔴 LMR ({lmr:.2f}) is low — may indicate reduced immune function")
-                    if sii > 600:
-                        st.markdown(f"- 🔴 SII ({sii:.2f}) is elevated — systemic inflammation index is high")
-                        # AI Suggestion
-                    st.markdown("---")
+                        st.error("You are currently at high risk. Please consult your physician as soon as possible to arrange more frequent follow-up examinations.")
+                        st.markdown("---")
                     st.markdown("**🤖 AI Suggestion**")
                     with st.spinner("Generating AI suggestion..."):
                         try:
@@ -306,10 +310,8 @@ if mode == "👤 Patient Mode":
                             st.info(ai_suggestion)
                         except Exception as e:
                             st.warning(f"AI suggestion unavailable: {e}")
-
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
-
 
 # ══════════════════════════════════════════════════════════
 # PHYSICIAN MODE
