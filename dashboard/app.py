@@ -4,6 +4,7 @@ import pandas as pd
 import joblib
 import shap
 import matplotlib.pyplot as plt
+import anthropic
 from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).parents[1]))
@@ -17,6 +18,72 @@ st.set_page_config(
 )
 
 # ── Load models ────────────────────────────────────────────
+def get_ai_suggestion_patient(nlr, plr, lmr, sii, risk_level_str):
+    """Generate AI suggestion for patient mode"""
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    
+    prompt = f"""You are a medical AI assistant helping head and neck cancer patients understand their post-operative recurrence risk assessment results.
+
+Patient's inflammatory markers:
+- NLR (Neutrophil-to-Lymphocyte Ratio): {nlr:.2f} (normal < 3)
+- PLR (Platelet-to-Lymphocyte Ratio): {plr:.2f} (normal < 150)
+- LMR (Lymphocyte-to-Monocyte Ratio): {lmr:.2f} (normal > 4)
+- SII (Systemic Immune-Inflammation Index): {sii:.2f} (normal < 600)
+
+Risk assessment result: {risk_level_str}
+
+Please provide a brief, friendly, and easy-to-understand suggestion for the patient (3-4 sentences). Focus on:
+1. Whether they should visit their doctor soon or can wait for regular follow-up
+2. Simple lifestyle advice if applicable
+3. Reassurance and encouragement
+
+Important: Do NOT mention specific medical diagnoses or treatments. Keep it simple and non-alarming. Write in English."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text
+
+
+def get_ai_suggestion_physician(nlr, plr, lmr, sii, risk_level_str, proba,
+                                 pt_stage, pn_stage, n_lymph, metastasis,
+                                 perinodal, lymphovasc, vascular, perineural):
+    """Generate AI suggestion for physician mode with literature references"""
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    
+    prompt = f"""You are a clinical decision support AI for head and neck squamous cell carcinoma (HNSCC).
+
+Patient clinical data:
+- Recurrence probability: {proba*100:.1f}%
+- Risk level: {risk_level_str}
+- NLR: {nlr:.2f} (normal < 3)
+- PLR: {plr:.2f} (normal < 150)
+- LMR: {lmr:.2f} (normal > 4)
+- SII: {sii:.2f} (normal < 600)
+- pT Stage: {pt_stage}
+- pN Stage: {pn_stage}
+- Positive lymph nodes: {n_lymph}
+- Distant metastasis: {metastasis}
+- Perinodal invasion: {perinodal}
+- Lymphovascular invasion: {lymphovasc}
+- Vascular invasion: {vascular}
+- Perineural invasion: {perineural}
+
+Please provide a clinical recommendation (4-5 sentences) including:
+1. Which abnormal values are driving the high/low risk and why
+2. Suggested clinical follow-up actions or diagnostic workup
+3. Reference to 1-2 relevant published studies supporting your recommendation (include author, journal, year)
+
+Write in a professional clinical tone in English."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text
 @st.cache_resource
 def load_models():
     model_dir    = Path(__file__).parent / "models"
@@ -230,6 +297,15 @@ if mode == "👤 Patient Mode":
                         st.markdown(f"- 🔴 LMR ({lmr:.2f}) is low — may indicate reduced immune function")
                     if sii > 600:
                         st.markdown(f"- 🔴 SII ({sii:.2f}) is elevated — systemic inflammation index is high")
+                        # AI Suggestion
+                    st.markdown("---")
+                    st.markdown("**🤖 AI Suggestion**")
+                    with st.spinner("Generating AI suggestion..."):
+                        try:
+                            ai_suggestion = get_ai_suggestion_patient(nlr, plr, lmr, sii, level)
+                            st.info(ai_suggestion)
+                        except Exception as e:
+                            st.warning(f"AI suggestion unavailable: {e}")
 
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
@@ -344,6 +420,20 @@ else:
                         plt.close()
                     except Exception as e:
                         st.warning(f"SHAP plot could not be displayed: {e}")
+# AI Suggestion for physician
+                    st.markdown("---")
+                    st.markdown("**🤖 AI Clinical Recommendation**")
+                    with st.spinner("Generating clinical recommendation..."):
+                        try:
+                            ai_rec = get_ai_suggestion_physician(
+                                nlr, plr, lmr, sii, level, proba,
+                                pt_stage, pn_stage, n_lymph, metastasis,
+                                perinodal, lymphovasc, vascular, perineural
+                            )
+                            st.info(ai_rec)
+                        except Exception as e:
+                            st.warning(f"AI recommendation unavailable: {e}")
+
 
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
