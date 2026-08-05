@@ -3,3 +3,4 @@ results/
 __pycache__/ 
 *.npz 
 .streamlit/secrets.toml 
+dashboard/.streamlit/secrets.toml 
