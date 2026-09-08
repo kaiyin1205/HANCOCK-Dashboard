@@ -548,8 +548,9 @@ if mode == "👤 Patient Mode":
 
         with st.spinner("Analyzing..."):
             try:
-                proba, X_selected  = predict_risk(input_data)
-                level, icon, color = biomarker_risk_level(nlr, plr, lmr, sii)
+                proba, X_selected        = predict_risk(input_data)
+                level, icon, color       = biomarker_risk_level(nlr, plr, lmr, sii)
+                model_level, model_icon, model_color = risk_level(proba)
 
                 st.markdown("---")
                 st.subheader("📈 Inflammatory Status Assessment")
@@ -559,9 +560,18 @@ if mode == "👤 Patient Mode":
                 col_r1, col_r2 = st.columns([1, 2])
                 with col_r1:
                     st.markdown(
-                        f"<div style='text-align:center; padding:30px; border-radius:15px; background-color:#f0f0f0;'>"
-                        f"<h1 style='font-size:60px'>{icon}</h1>"
-                        f"<h2 style='color:{color}'>{level}</h2>"
+                        f"<div style='text-align:center; padding:20px; border-radius:15px; background-color:#f0f0f0; margin-bottom:10px;'>"
+                        f"<p style='font-size:12px; color:gray; margin:0;'>Inflammatory Status</p>"
+                        f"<h1 style='font-size:50px; margin:0;'>{icon}</h1>"
+                        f"<h2 style='color:{color}; margin:0;'>{level}</h2>"
+                        f"<p style='font-size:11px; color:gray;'>Based on inflammatory markers</p>"
+                        f"</div>"
+                        f"<div style='text-align:center; padding:20px; border-radius:15px; background-color:#f0f0f0;'>"
+                        f"<p style='font-size:12px; color:gray; margin:0;'>Model Prediction</p>"
+                        f"<h1 style='font-size:50px; margin:0;'>{model_icon}</h1>"
+                        f"<h2 style='color:{model_color}; margin:0;'>{model_level}</h2>"
+                        f"<p style='font-size:11px; color:gray;'>Recurrence probability: {proba*100:.1f}%</p>"
+                        f"<p style='font-size:10px; color:gray;'>Based on limited data (no pathological info)</p>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
