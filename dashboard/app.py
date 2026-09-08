@@ -93,17 +93,23 @@ def extract_blood_values_from_image(image_bytes, media_type="image/jpeg"):
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Please analyze this health check report image and extract the following blood test values:\n\n"
-        "1. Neutrophils (in x10^3/uL or similar unit)\n"
-        "2. Lymphocytes (in x10^3/uL or similar unit)\n"
-        "3. Platelets (in x10^3/uL or similar unit)\n"
-        "4. Monocytes (in x10^3/uL or similar unit)\n\n"
+        "Please analyze this health check report image and extract the following information:\n\n"
+        "SECTION 1 - Patient Basic Information:\n"
+        "1. Age (年齡) - extract the number only\n"
+        "2. Sex (性別) - return 'Male' or 'Female' only\n\n"
+        "SECTION 2 - Blood Test Values (in x10^3/uL):\n"
+        "1. Neutrophils (嗜中性球 NEU)\n"
+        "2. Lymphocytes (淋巴球 LYM)\n"
+        "3. Platelets (血小板 PLT)\n"
+        "4. Monocytes (單核球 MONO)\n\n"
         "The report may be in Chinese or English. Please:\n"
-        "- Look for these values in the complete blood count (CBC) section\n"
+        "- If differential counts are in percentage, multiply by WBC to get absolute values\n"
         "- Convert units if necessary (e.g., if in x10^9/L, divide by 1 to get x10^3/uL)\n"
         "- If a value is not found, return null for that field\n\n"
         "Return ONLY a JSON object in this exact format, nothing else:\n"
         "{\n"
+        '  "age": <number or null>,\n'
+        '  "sex": <"Male" or "Female" or null>,\n'
         '  "neutrophils": <number or null>,\n'
         '  "lymphocytes": <number or null>,\n'
         '  "platelets": <number or null>,\n'
@@ -325,12 +331,108 @@ if mode == "👤 Patient Mode":
     )
     st.markdown("---")
 
+        # OCR upload section - before columns so it runs first
+    st.subheader("📤 Upload Health Check Report (Optional)")
+    uploaded_file = st.file_uploader(
+        "Upload report for automatic extraction (PDF, JPG, PNG)",
+        type=["pdf", "jpg", "jpeg", "png"],
+        key="patient_report_main"
+    )
+
+    if uploaded_file is not None:
+        with st.spinner("Reading your health check report..."):
+            try:
+                file_bytes = uploaded_file.read()
+                if uploaded_file.type == "application/pdf":
+                    image_bytes = pdf_to_image_bytes(file_bytes)
+                    media_type  = "image/jpeg"
+                else:
+                    image_bytes = file_bytes
+                    media_type  = uploaded_file.type
+
+                image = Image.open(io.BytesIO(image_bytes))
+                st.image(image, caption="Uploaded Report", use_container_width=True)
+
+                extracted = extract_blood_values_from_image(image_bytes, media_type)
+
+                if extracted:
+                    st.success("Values extracted successfully! Please verify before analyzing.")
+                    if extracted.get("notes"):
+                        st.info(f"Note: {extracted['notes']}")
+
+                    st.markdown("**Please confirm the extracted values:**")
+
+                    col_e1, col_e2 = st.columns(2)
+                    with col_e1:
+                        confirmed_age = st.number_input(
+                            "Age",
+                            min_value=18, max_value=100,
+                            value=int(extracted.get("age") or 60),
+                            key="confirm_age"
+                        )
+                        sex_options   = ["Male", "Female"]
+                        sex_extracted = extracted.get("sex") or "Male"
+                        sex_idx       = sex_options.index(sex_extracted) if sex_extracted in sex_options else 0
+                        confirmed_sex = st.selectbox(
+                            "Sex",
+                            sex_options,
+                            index=sex_idx,
+                            key="confirm_sex"
+                        )
+                        confirmed_neutrophils = st.number_input(
+                            "Neutrophils (x10^3/uL)",
+                            min_value=0.0,
+                            value=float(extracted.get("neutrophils") or 4.0),
+                            step=0.1,
+                            key="confirm_neutrophils"
+                        )
+                    with col_e2:
+                        confirmed_lymphocytes = st.number_input(
+                            "Lymphocytes (x10^3/uL)",
+                            min_value=0.1,
+                            value=float(extracted.get("lymphocytes") or 2.0),
+                            step=0.1,
+                            key="confirm_lymphocytes"
+                        )
+                        confirmed_platelets = st.number_input(
+                            "Platelets (x10^3/uL)",
+                            min_value=0.0,
+                            value=float(extracted.get("platelets") or 200.0),
+                            step=1.0,
+                            key="confirm_platelets"
+                        )
+                        confirmed_monocytes = st.number_input(
+                            "Monocytes (x10^3/uL)",
+                            min_value=0.1,
+                            value=float(extracted.get("monocytes") or 0.5),
+                            step=0.1,
+                            key="confirm_monocytes"
+                        )
+
+                    if st.button("Confirm and Use These Values", type="primary"):
+                        st.session_state["age"]         = confirmed_age
+                        st.session_state["sex"]         = confirmed_sex
+                        st.session_state["neutrophils"] = confirmed_neutrophils
+                        st.session_state["lymphocytes"] = confirmed_lymphocytes
+                        st.session_state["platelets"]   = confirmed_platelets
+                        st.session_state["monocytes"]   = confirmed_monocytes
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"Could not extract values: {e}")
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("📋 Basic Information")
-        age     = st.number_input("Age", min_value=18, max_value=100, value=60)
-        sex     = st.selectbox("Sex", ["Male", "Female"])
+        age = st.number_input("Age", min_value=18, max_value=100, value=int(st.session_state.get("age", 60)))
+        
+        sex_options = ["Male", "Female"]
+        sex_default = sex_options.index(st.session_state.get("sex", "Male")) if st.session_state.get("sex") in sex_options else 0
+        sex = st.selectbox("Sex", sex_options, index=sex_default)
+        
         smoking = st.selectbox("Smoking Status", ["Never", "Current", "Former"])
 
     with col2:
@@ -359,52 +461,23 @@ if mode == "👤 Patient Mode":
                     st.image(image, caption="Uploaded Report", use_container_width=True)
 
                     extracted = extract_blood_values_from_image(image_bytes, media_type)
-
                     if extracted:
-                        st.success("Values extracted successfully! Please verify before analyzing.")
+                        st.success("Values extracted! Fields have been updated below.")
                         if extracted.get("notes"):
                             st.info(f"Note: {extracted['notes']}")
-
-                        # Show extracted values for user confirmation
-                        st.markdown("**Please confirm the extracted values:**")
-                        col_e1, col_e2 = st.columns(2)
-                        with col_e1:
-                            confirmed_neutrophils = st.number_input(
-                                "Neutrophils (x10^3/uL)",
-                                min_value=0.0,
-                                value=float(extracted.get("neutrophils") or 4.0),
-                                step=0.1,
-                                key="confirm_neutrophils"
-                            )
-                            confirmed_lymphocytes = st.number_input(
-                                "Lymphocytes (x10^3/uL)",
-                                min_value=0.1,
-                                value=float(extracted.get("lymphocytes") or 2.0),
-                                step=0.1,
-                                key="confirm_lymphocytes"
-                            )
-                        with col_e2:
-                            confirmed_platelets = st.number_input(
-                                "Platelets (x10^3/uL)",
-                                min_value=0.0,
-                                value=float(extracted.get("platelets") or 200.0),
-                                step=1.0,
-                                key="confirm_platelets"
-                            )
-                            confirmed_monocytes = st.number_input(
-                                "Monocytes (x10^3/uL)",
-                                min_value=0.1,
-                                value=float(extracted.get("monocytes") or 0.5),
-                                step=0.1,
-                                key="confirm_monocytes"
-                            )
-
-                        if st.button("Confirm and Use These Values", type="primary"):
-                            st.session_state["neutrophils"] = confirmed_neutrophils
-                            st.session_state["lymphocytes"] = confirmed_lymphocytes
-                            st.session_state["platelets"]   = confirmed_platelets
-                            st.session_state["monocytes"]   = confirmed_monocytes
-                            st.rerun()
+                        if extracted.get("age"):
+                            st.session_state["age"]         = int(extracted["age"])
+                        if extracted.get("sex"):
+                            st.session_state["sex"]         = extracted["sex"]
+                        if extracted.get("neutrophils"):
+                            st.session_state["neutrophils"] = float(extracted["neutrophils"])
+                        if extracted.get("lymphocytes"):
+                            st.session_state["lymphocytes"] = float(extracted["lymphocytes"])
+                        if extracted.get("platelets"):
+                            st.session_state["platelets"]   = float(extracted["platelets"])
+                        if extracted.get("monocytes"):
+                            st.session_state["monocytes"]   = float(extracted["monocytes"])
+                        st.rerun()
 
                 except Exception as e:
                     st.error(f"Could not extract values: {e}")
@@ -557,49 +630,6 @@ else:
 
         with col2:
             st.subheader("Blood Test Values")
-
-            # OCR upload section for physician
-            st.caption("Option 1: Upload health check report for automatic extraction")
-            uploaded_file_doc = st.file_uploader(
-                "Upload report (PDF, JPG, PNG)",
-                type=["pdf", "jpg", "jpeg", "png"],
-                key="doctor_report"
-            )
-
-            if uploaded_file_doc is not None:
-                with st.spinner("Reading health check report..."):
-                    try:
-                        file_bytes = uploaded_file_doc.read()
-                        if uploaded_file_doc.type == "application/pdf":
-                            image_bytes = pdf_to_image_bytes(file_bytes)
-                            media_type  = "image/jpeg"
-                        else:
-                            image_bytes = file_bytes
-                            media_type  = uploaded_file_doc.type
-
-                        image = Image.open(io.BytesIO(image_bytes))
-                        st.image(image, caption="Uploaded Report", use_container_width=True)
-
-                        extracted = extract_blood_values_from_image(image_bytes, media_type)
-
-                        if extracted:
-                            st.success("Values extracted! Please verify below.")
-                            if extracted.get("notes"):
-                                st.info(f"Note: {extracted['notes']}")
-                            if extracted.get("neutrophils"):
-                                st.session_state["doc_neutrophils"] = float(extracted["neutrophils"])
-                            if extracted.get("lymphocytes"):
-                                st.session_state["doc_lymphocytes"] = float(extracted["lymphocytes"])
-                            if extracted.get("platelets"):
-                                st.session_state["doc_platelets"]   = float(extracted["platelets"])
-                            if extracted.get("monocytes"):
-                                st.session_state["doc_monocytes"]   = float(extracted["monocytes"])
-                            st.rerun()
-
-                    except Exception as e:
-                        st.error(f"Could not extract values: {e}")
-
-            st.caption("Option 2: Enter values manually")
             neutrophils = st.number_input(
                 "Neutrophils (x10^3/uL)",
                 min_value=0.0,
