@@ -158,15 +158,17 @@ def pdf_to_image_bytes(pdf_bytes):
 # ── Load models ────────────────────────────────────────────
 @st.cache_resource
 def load_models():
-    model_dir    = Path(__file__).parent / "models"
-    model        = joblib.load(model_dir / "model.pkl")
-    preprocessor = joblib.load(model_dir / "preprocessor.pkl")
-    selector     = joblib.load(model_dir / "selector.pkl")
-    feature_names= joblib.load(model_dir / "feature_names.pkl")
-    clip_bounds  = joblib.load(model_dir / "clip_bounds.pkl")
-    return model, preprocessor, selector, feature_names, clip_bounds
+    model_dir     = Path(__file__).parent / "models"
+    stack_a       = joblib.load(model_dir / "stack_a.pkl")
+    stack_b       = joblib.load(model_dir / "stack_b.pkl")
+    preprocessor  = joblib.load(model_dir / "preprocessor.pkl")
+    selector      = joblib.load(model_dir / "selector.pkl")
+    feature_names = joblib.load(model_dir / "feature_names.pkl")
+    clip_bounds   = joblib.load(model_dir / "clip_bounds.pkl")
+    weights       = joblib.load(model_dir / "weights.pkl")
+    return stack_a, stack_b, preprocessor, selector, feature_names, clip_bounds, weights
 
-model, preprocessor, selector, feature_names, clip_bounds = load_models()
+stack_a, stack_b, preprocessor, selector, feature_names, clip_bounds, weights = load_models()
 
 
 # ── Calculate inflammatory biomarkers ─────────────────────
@@ -225,13 +227,17 @@ def predict_risk(input_data):
     df         = add_interaction_features(df)
     X_proc     = preprocessor.transform(df)
     X_selected = selector.transform(X_proc)
-    proba      = model.predict_proba(X_selected)[0][1]
+    p_a   = stack_a.predict_proba(X_selected)[0][1]
+    p_b   = stack_b.predict_proba(X_selected)[0][1]
+    w_a   = weights["weight_a"]
+    w_b   = weights["weight_b"]
+    proba = w_a * p_a + w_b * p_b
     return proba, X_selected
 
 
 # ── Get SHAP values ────────────────────────────────────────
 def get_shap_values(X_selected):
-    rf_model  = model.estimators_[0]
+    rf_model  = stack_a.estimators_[0]
     explainer = shap.TreeExplainer(rf_model)
     shap_vals = explainer.shap_values(X_selected)
     if isinstance(shap_vals, list):
