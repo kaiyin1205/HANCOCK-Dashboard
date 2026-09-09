@@ -355,7 +355,21 @@ if mode == "👤 Patient Mode":
 
                 extracted = extract_blood_values_from_image(image_bytes, media_type)
 
-                if extracted:
+                # Check if the uploaded file is a valid health check report
+                has_valid_data = any([
+                    extracted.get("neutrophils"),
+                    extracted.get("lymphocytes"),
+                    extracted.get("platelets"),
+                    extracted.get("monocytes")
+                ])
+
+                if not has_valid_data:
+                    st.error(
+                        "This does not appear to be a valid blood test report. "
+                        "Please upload a Complete Blood Count (CBC) report that includes "
+                        "Neutrophils, Lymphocytes, Platelets, and Monocytes values."
+                    )
+                elif extracted:
                     st.success("Values extracted successfully! Please verify before analyzing.")
                     if extracted.get("notes"):
                         st.info(f"Note: {extracted['notes']}")
@@ -628,18 +642,124 @@ else:
     st.markdown("Please enter the complete patient clinical data for a detailed risk analysis report.")
     st.markdown("---")
 
+
+    # OCR upload - must be OUTSIDE the form
+    st.subheader("Upload Health Check Report (Optional)")
+    uploaded_file_doc = st.file_uploader(
+        "Upload report for automatic extraction (PDF, JPG, PNG)",
+        type=["pdf", "jpg", "jpeg", "png"],
+        key="doctor_report"
+    )
+
+    if uploaded_file_doc is not None:
+        with st.spinner("Reading health check report..."):
+            try:
+                file_bytes = uploaded_file_doc.read()
+                if uploaded_file_doc.type == "application/pdf":
+                    image_bytes = pdf_to_image_bytes(file_bytes)
+                    media_type  = "image/jpeg"
+                else:
+                    image_bytes = file_bytes
+                    media_type  = uploaded_file_doc.type
+
+                image = Image.open(io.BytesIO(image_bytes))
+                st.image(image, caption="Uploaded Report", use_container_width=True)
+
+                extracted = extract_blood_values_from_image(image_bytes, media_type)
+
+                has_valid_data = any([
+                    extracted.get("neutrophils"),
+                    extracted.get("lymphocytes"),
+                    extracted.get("platelets"),
+                    extracted.get("monocytes")
+                ])
+
+                if not has_valid_data:
+                    st.error(
+                        "This does not appear to be a valid blood test report. "
+                        "Please upload a Complete Blood Count (CBC) report that includes "
+                        "Neutrophils, Lymphocytes, Platelets, and Monocytes values."
+                    )
+                elif extracted:
+                    st.success("Values extracted! Please verify before analyzing.")
+                    if extracted.get("notes"):
+                        st.info(f"Note: {extracted['notes']}")
+
+                    st.markdown("**Please confirm the extracted values:**")
+                    col_e1, col_e2 = st.columns(2)
+                    with col_e1:
+                        confirmed_age = st.number_input(
+                            "Age", min_value=18, max_value=100,
+                            value=int(extracted.get("age") or 60),
+                            key="doc_confirm_age"
+                        )
+                        sex_options   = ["Male", "Female"]
+                        sex_extracted = extracted.get("sex") or "Male"
+                        sex_idx       = sex_options.index(sex_extracted) if sex_extracted in sex_options else 0
+                        confirmed_sex = st.selectbox(
+                            "Sex", sex_options, index=sex_idx,
+                            key="doc_confirm_sex"
+                        )
+                        confirmed_neutrophils = st.number_input(
+                            "Neutrophils (x10^3/uL)",
+                            min_value=0.0,
+                            value=float(extracted.get("neutrophils") or 4.0),
+                            step=0.1,
+                            key="doc_confirm_neutrophils"
+                        )
+                    with col_e2:
+                        confirmed_lymphocytes = st.number_input(
+                            "Lymphocytes (x10^3/uL)",
+                            min_value=0.1,
+                            value=float(extracted.get("lymphocytes") or 2.0),
+                            step=0.1,
+                            key="doc_confirm_lymphocytes"
+                        )
+                        confirmed_platelets = st.number_input(
+                            "Platelets (x10^3/uL)",
+                            min_value=0.0,
+                            value=float(extracted.get("platelets") or 200.0),
+                            step=1.0,
+                            key="doc_confirm_platelets"
+                        )
+                        confirmed_monocytes = st.number_input(
+                            "Monocytes (x10^3/uL)",
+                            min_value=0.1,
+                            value=float(extracted.get("monocytes") or 0.5),
+                            step=0.1,
+                            key="doc_confirm_monocytes"
+                        )
+
+                    if st.button("Confirm and Use These Values", type="primary", key="doc_confirm_btn"):
+                        st.session_state["doc_age"]         = confirmed_age
+                        st.session_state["doc_sex"]         = confirmed_sex
+                        st.session_state["doc_neutrophils"] = confirmed_neutrophils
+                        st.session_state["doc_lymphocytes"] = confirmed_lymphocytes
+                        st.session_state["doc_platelets"]   = confirmed_platelets
+                        st.session_state["doc_monocytes"]   = confirmed_monocytes
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"Could not extract values: {e}")
+
+    st.markdown("---")
+
     with st.form("doctor_form"):
         col1, col2, col3 = st.columns(3)
 
         with col1:
             st.subheader("Basic Information")
-            age        = st.number_input("Age",          min_value=18, max_value=100, value=60)
-            sex        = st.selectbox("Sex",             ["Male", "Female"])
-            smoking    = st.selectbox("Smoking Status",  ["Never", "Current", "Former"])
-            metastasis = st.selectbox("Distant Metastasis", ["No", "Yes"])
+            age = st.number_input("Age", min_value=18, max_value=100, value=int(st.session_state.get("doc_age", 60)))
+
+            sex_options = ["Male", "Female"]
+            sex_default = sex_options.index(st.session_state.get("doc_sex", "Male")) if st.session_state.get("doc_sex") in sex_options else 0
+            sex = st.selectbox("Sex", sex_options, index=sex_default)
+
+            smoking    = st.selectbox("Smoking Status",      ["Never", "Current", "Former"])
+            metastasis = st.selectbox("Distant Metastasis",  ["No", "Yes"])
 
         with col2:
-            st.subheader("Blood Test Values")
+            st.subheader("Blood Test Values") 
             neutrophils = st.number_input(
                 "Neutrophils (x10^3/uL)",
                 min_value=0.0,
