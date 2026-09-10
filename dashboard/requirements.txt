@@ -10,3 +10,4 @@ joblib
 umap-learn
 anthropic
 pymupdf
+catboost
