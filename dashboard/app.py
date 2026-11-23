@@ -102,6 +102,10 @@ def extract_blood_values_from_image(image_bytes, media_type="image/jpeg"):
         "2. Lymphocytes (淋巴球 LYM)\n"
         "3. Platelets (血小板 PLT)\n"
         "4. Monocytes (單核球 MONO)\n\n"
+        "SECTION 3 - Platelet and red-cell indices (return null if not printed on the report):\n"
+        "1. MPV (平均血小板體積, in fL)\n"
+        "2. PDW (血小板分佈寬度, as printed, fL or %)\n"
+        "3. RDW-CV (紅血球分佈寬度, in %; do NOT return RDW-SD in fL)\n\n"
         "The report may be in Chinese or English. Please:\n"
         "- If differential counts are in percentage, multiply by WBC to get absolute values\n"
         "- Convert units if necessary (e.g., if in x10^9/L, divide by 1 to get x10^3/uL)\n"
@@ -114,6 +118,9 @@ def extract_blood_values_from_image(image_bytes, media_type="image/jpeg"):
         '  "lymphocytes": <number or null>,\n'
         '  "platelets": <number or null>,\n'
         '  "monocytes": <number or null>,\n'
+        '  "mpv": <number or null>,\n'
+        '  "pdw": <number or null>,\n'
+        '  "rdw": <number or null>,\n'
         '  "notes": "<any important notes about the extraction>"\n'
         "}"
     )
@@ -153,6 +160,14 @@ def pdf_to_image_bytes(pdf_bytes):
     img_bytes = pix.tobytes("jpeg")
     pdf_document.close()
     return img_bytes
+
+
+# ── Defaults for optional platelet / red-cell indices (cohort medians) ──
+DEFAULT_MPV, DEFAULT_PDW, DEFAULT_RDW = 10.5, 11.9, 13.4
+
+
+def _clamp(v, lo, hi):
+    return float(min(max(float(v), lo), hi))
 
 
 # ── Load models ────────────────────────────────────────────
@@ -217,9 +232,20 @@ def predict_risk(input_data):
     df = pd.DataFrame([input_data])
     model_dir  = Path(__file__).parent / "models"
     train_cols = joblib.load(model_dir / "train_columns.pkl")
+    # Features that the user cannot enter are filled with the TRAINING-set mean
+    # (numeric) or mode (categorical) saved at training time in train_defaults.pkl.
+    # If that file is missing, NaN is passed so the fitted preprocessor's own
+    # imputer handles it. They are never filled with 0.
+    defaults_path  = model_dir / "train_defaults.pkl"
+    train_defaults = joblib.load(defaults_path) if defaults_path.exists() else {}
+    if not train_defaults:
+        st.warning(
+            "train_defaults.pkl not found: features not entered are passed as NaN "
+            "to the preprocessor instead of the training mean / mode."
+        )
     for col in train_cols:
         if col not in df.columns:
-            df[col] = 0
+            df[col] = train_defaults.get(col, np.nan)
     df = df[train_cols]
     for col, (q_low, q_high) in clip_bounds.items():
         if col in df.columns:
@@ -428,6 +454,21 @@ if mode == "👤 Patient Mode":
                             step=0.1,
                             key="confirm_monocytes"
                         )
+                        confirmed_mpv = st.number_input(
+                            "MPV (fL)", min_value=4.0, max_value=20.0, step=0.1,
+                            value=_clamp(extracted.get("mpv") or DEFAULT_MPV, 4.0, 20.0),
+                            key="confirm_mpv"
+                        )
+                        confirmed_pdw = st.number_input(
+                            "PDW (fL or %, as printed)", min_value=5.0, max_value=30.0, step=0.1,
+                            value=_clamp(extracted.get("pdw") or DEFAULT_PDW, 5.0, 30.0),
+                            key="confirm_pdw"
+                        )
+                        confirmed_rdw = st.number_input(
+                            "RDW-CV (%)", min_value=8.0, max_value=30.0, step=0.1,
+                            value=_clamp(extracted.get("rdw") or DEFAULT_RDW, 8.0, 30.0),
+                            key="confirm_rdw"
+                        )
 
                     if st.button("Confirm and Use These Values", type="primary"):
                         st.session_state["age"]         = confirmed_age
@@ -436,6 +477,9 @@ if mode == "👤 Patient Mode":
                         st.session_state["lymphocytes"] = confirmed_lymphocytes
                         st.session_state["platelets"]   = confirmed_platelets
                         st.session_state["monocytes"]   = confirmed_monocytes
+                        st.session_state["mpv"]         = confirmed_mpv
+                        st.session_state["pdw"]         = confirmed_pdw
+                        st.session_state["rdw"]         = confirmed_rdw
                         st.rerun()
 
             except Exception as e:
@@ -497,6 +541,12 @@ if mode == "👤 Patient Mode":
                             st.session_state["platelets"]   = float(extracted["platelets"])
                         if extracted.get("monocytes"):
                             st.session_state["monocytes"]   = float(extracted["monocytes"])
+                        if extracted.get("mpv"):
+                            st.session_state["mpv"]         = _clamp(extracted["mpv"], 4.0, 20.0)
+                        if extracted.get("pdw"):
+                            st.session_state["pdw"]         = _clamp(extracted["pdw"], 5.0, 30.0)
+                        if extracted.get("rdw"):
+                            st.session_state["rdw"]         = _clamp(extracted["rdw"], 8.0, 30.0)
                         st.rerun()
 
                 except Exception as e:
@@ -527,6 +577,22 @@ if mode == "👤 Patient Mode":
             value=float(st.session_state.get("monocytes", 0.5)),
             step=0.1
         )
+        mpv = st.number_input(
+            "MPV (fL)", min_value=4.0, max_value=20.0, step=0.1,
+            value=float(st.session_state.get("mpv", DEFAULT_MPV))
+        )
+        pdw = st.number_input(
+            "PDW (fL or %, as printed)", min_value=5.0, max_value=30.0, step=0.1,
+            value=float(st.session_state.get("pdw", DEFAULT_PDW))
+        )
+        rdw = st.number_input(
+            "RDW-CV (%)", min_value=8.0, max_value=30.0, step=0.1,
+            value=float(st.session_state.get("rdw", DEFAULT_RDW))
+        )
+        st.caption(
+            "MPV, PDW and RDW are model inputs. Defaults are cohort medians; "
+            "replace them with the values on your report if available."
+        )
 
     nlr, plr, lmr, sii = calculate_biomarkers(neutrophils, lymphocytes, platelets, monocytes)
 
@@ -541,29 +607,20 @@ if mode == "👤 Patient Mode":
     st.markdown("---")
 
     if st.button("🔍 Analyze", type="primary", use_container_width=True):
+        # Only values the patient actually provides are passed. Every other model
+        # input (pathology, tumour site, grading, HPV, ...) is filled in
+        # predict_risk() with the training-set mean / mode, never a hard-coded value.
         input_data = {
             "sex"                               : 1 if sex == "Male" else 0,
-            "primarily_metastasis"              : 0,
             "smoking_status"                    : {"Never": 0, "Current": 1, "Former": 2}[smoking],
             "age_at_initial_diagnosis"          : age,
-            "perinodal_invasion"                : 0,
-            "lymphovascular_invasion_L"         : 0,
-            "vascular_invasion_V"               : 0,
-            "perineural_invasion_Pn"            : 0,
-            "carcinoma_in_situ"                 : 0,
-            "primary_tumor_site"                : 0,
-            "grading"                           : 2,
-            "hpv_association_p16"               : 0,
-            "resection_status"                  : 0,
-            "resection_status_carcinoma_in_situ": 0,
-            "histologic_type"                   : 0,
-            "number_of_positive_lymph_nodes"    : 0,
-            "infiltration_depth_in_mm"          : 5.0,
-            "pT_stage"                          : 2,
-            "pN_stage"                          : 0,
             "NLR"                               : nlr,
             "PLR"                               : plr,
             "LMR"                               : lmr,
+            "Platelet_count"                    : platelets,
+            "Platelet_mean_volume"              : mpv,
+            "Platelet_distribution_width"       : pdw,
+            "Erythrocyte_distribution_width"    : rdw,
         }
 
         with st.spinner("Analyzing..."):
@@ -735,6 +792,21 @@ else:
                             step=0.1,
                             key="doc_confirm_monocytes"
                         )
+                        confirmed_mpv = st.number_input(
+                            "MPV (fL)", min_value=4.0, max_value=20.0, step=0.1,
+                            value=_clamp(extracted.get("mpv") or DEFAULT_MPV, 4.0, 20.0),
+                            key="doc_confirm_mpv"
+                        )
+                        confirmed_pdw = st.number_input(
+                            "PDW (fL or %, as printed)", min_value=5.0, max_value=30.0, step=0.1,
+                            value=_clamp(extracted.get("pdw") or DEFAULT_PDW, 5.0, 30.0),
+                            key="doc_confirm_pdw"
+                        )
+                        confirmed_rdw = st.number_input(
+                            "RDW-CV (%)", min_value=8.0, max_value=30.0, step=0.1,
+                            value=_clamp(extracted.get("rdw") or DEFAULT_RDW, 8.0, 30.0),
+                            key="doc_confirm_rdw"
+                        )
 
                     if st.button("Confirm and Use These Values", type="primary", key="doc_confirm_btn"):
                         st.session_state["doc_age"]         = confirmed_age
@@ -743,6 +815,9 @@ else:
                         st.session_state["doc_lymphocytes"] = confirmed_lymphocytes
                         st.session_state["doc_platelets"]   = confirmed_platelets
                         st.session_state["doc_monocytes"]   = confirmed_monocytes
+                        st.session_state["doc_mpv"]         = confirmed_mpv
+                        st.session_state["doc_pdw"]         = confirmed_pdw
+                        st.session_state["doc_rdw"]         = confirmed_rdw
                         st.rerun()
 
             except Exception as e:
@@ -790,6 +865,19 @@ else:
                 value=float(st.session_state.get("doc_monocytes", 0.5)),
                 step=0.1
             )
+            mpv = st.number_input(
+                "MPV (fL)", min_value=4.0, max_value=20.0, step=0.1,
+                value=float(st.session_state.get("doc_mpv", DEFAULT_MPV))
+            )
+            pdw = st.number_input(
+                "PDW (fL or %, as printed)", min_value=5.0, max_value=30.0, step=0.1,
+                value=float(st.session_state.get("doc_pdw", DEFAULT_PDW))
+            )
+            rdw = st.number_input(
+                "RDW-CV (%)", min_value=8.0, max_value=30.0, step=0.1,
+                value=float(st.session_state.get("doc_rdw", DEFAULT_RDW))
+            )
+            st.caption("MPV, PDW and RDW are model inputs; defaults are cohort medians.")
 
         with col3:
             st.subheader("Pathological Data")
@@ -807,6 +895,9 @@ else:
     if submitted:
         nlr, plr, lmr, sii = calculate_biomarkers(neutrophils, lymphocytes, platelets, monocytes)
 
+        # Fields the interface does not collect (tumour site, grading, HPV, resection
+        # status, histologic type, ...) are filled in predict_risk() with the
+        # training-set mean / mode, never a hard-coded value.
         input_data = {
             "sex"                               : 1 if sex == "Male" else 0,
             "primarily_metastasis"              : 1 if metastasis == "Yes" else 0,
@@ -816,13 +907,6 @@ else:
             "lymphovascular_invasion_L"         : 1 if lymphovasc == "Yes" else 0,
             "vascular_invasion_V"               : 1 if vascular == "Yes" else 0,
             "perineural_invasion_Pn"            : 1 if perineural == "Yes" else 0,
-            "carcinoma_in_situ"                 : 0,
-            "primary_tumor_site"                : 0,
-            "grading"                           : 2,
-            "hpv_association_p16"               : 0,
-            "resection_status"                  : 0,
-            "resection_status_carcinoma_in_situ": 0,
-            "histologic_type"                   : 0,
             "number_of_positive_lymph_nodes"    : n_lymph,
             "infiltration_depth_in_mm"          : infiltration,
             "pT_stage"                          : pt_stage,
@@ -830,6 +914,10 @@ else:
             "NLR"                               : nlr,
             "PLR"                               : plr,
             "LMR"                               : lmr,
+            "Platelet_count"                    : platelets,
+            "Platelet_mean_volume"              : mpv,
+            "Platelet_distribution_width"       : pdw,
+            "Erythrocyte_distribution_width"    : rdw,
         }
 
         with st.spinner("Analyzing, please wait..."):
